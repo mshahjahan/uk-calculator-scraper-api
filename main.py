@@ -11,7 +11,7 @@ CORS(app)
 def parse_weight_from_text(text):
     if not text:
         return 500, "Grams"
-    pattern = r'(\d+(?:\.\d+)?)\s*(grams|gram|g|kg|kilograms|kilogram|ml|l|litres|litre)\b'
+    pattern = r'\b(\d+(?:\.\d+)?)\s*(grams|gram|g|kg|kilograms|kilogram|ml|l|litres|litre)\b'
     match = re.search(pattern, text, re.IGNORECASE)
     if match:
         weight_val = float(match.group(1))
@@ -26,92 +26,86 @@ def parse_weight_from_text(text):
 def scrape():
     data = request.get_json()
     if not data or 'url' not in data:
-        return jsonify({"error": "No URL provided"}), 400
+        return jsonify({"error": "URL is required"}), 400
+
     url = data['url']
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Accept-Language": "en-GB,en;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
+
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return jsonify({"error": f"Failed to fetch page. Status: {response.status_code}"}), 400
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # --- ১. প্রোডাক্টের নাম স্ক্র্যাপ করা ---
-        product_name = ""
-        h1_tag = soup.find('h1')
-        if h1_tag:
-            product_name = h1_tag.get_text(strip=True)
-        if not product_name and soup.title:
-            product_name = soup.title.get_text(strip=True).split('|')[0].split('-')[0].strip()
-            
-        # --- ২. প্রোডাক্টের ছবি স্ক্র্যাপ করা (Image Extraction) ---
-        img_url = ""
-        
-        # ওপেন গ্রাফ ইমেজ ট্যাগ চেক করা (সবচেয়ে নিখুঁত মেটা ট্যাগ)
-        og_image = soup.find("meta", property="og:image")
-        if og_image and og_image.get("content"):
-            img_url = og_image["content"]
-            
-        # যদি মেটা ট্যাগে না পাওয়া যায়, তবে প্রোডাক্ট পেজের ইমেজ এলিমেন্টগুলো সার্চ করা
-        if not img_url:
-            img_selectors = [
-                'img[class*="product-image"]',
-                'img[class*="main-image"]',
-                'img[class*="hero"]',
-                '#main-image',
-                '#product-image',
-                'div[class*="image-container"] img',
-                'main img'
-            ]
-            for selector in img_selectors:
-                img_tag = soup.select_one(selector)
-                if img_tag and img_tag.get('src'):
-                    img_url = img_tag['src']
-                    break
-                    
-        # যদি রিলেটিভ ইউআরএল থাকে (যেমন: "/images/product.jpg") সেটিকে পরম ইউআরএল-এ রূপান্তর করা
-        if img_url:
-            img_url = urljoin(url, img_url)
-            
-        # --- ৩. প্রোডাক্টের দাম স্ক্র্যাপ করা (দশমিক সহ) ---
-        price_val = None
-        price_selectors = [
-            'span.co-product__price', 
-            '.pd-price', 
-            '.price', 
-            '[data-qa="product-price"]',
-            'span[class*="price"]',
-            '.price-item'
-        ]
-        
-        for selector in price_selectors:
-            price_element = soup.select_one(selector)
+
+        # ১. নাম স্ক্র্যাপ করা
+        og_title = soup.find("meta", property="og:title")
+        name = og_title["content"].strip() if og_title else ""
+        if not name:
+            h1_tag = soup.find("h1")
+            name = h1_tag.get_text().strip() if h1_tag else "UK Premium Product"
+
+        # ২. মূল্য স্ক্র্যাপ করা
+        og_price = soup.find("meta", property="og:price:amount")
+        price_val = og_price["content"].strip() if og_price else ""
+        if not price_val:
+            price_element = soup.find(class_=re.compile("price|amount", re.I))
             if price_element:
-                price_text = price_element.get_text(strip=True)
-                price_match = re.search(r'[\d\.]+', price_text)
-                if price_match:
-                    price_val = float(price_match.group())
-                    break
-        if price_val is None:
-            fallback_match = re.search(r'£\s*(\d+\.\d{2})', response.text)
-            if fallback_match:
-                price_val = float(fallback_match.group(1))
-                
-        # --- ৪. প্রোডাক্টের ওজন বের করা ---
-        weight_val, unit_val = parse_weight_from_text(product_name if product_name else url)
-        if price_val is None:
-            return jsonify({"error": "Price not found on page"}), 400
+                price_text = price_element.get_text()
+                price_numbers = re.findall(r"\d+\.\d+|\d+", price_text)
+                price_val = price_numbers[0] if price_numbers else "0"
+            else:
+                price_val = "0"
+        try:
+            price = float(price_val)
+        except ValueError:
+            price = 0.0
+
+        # ৩. ছবি স্ক্র্যাপ করা
+        og_image = soup.find("meta", property="og:image")
+        image = og_image["content"].strip() if og_image else ""
+        if not image:
+            img_tag = soup.find("img")
+            if img_tag and img_tag.get("src"):
+                image = urljoin(url, img_tag["src"].strip())
+            else:
+                image = "https://via.placeholder.com/200?text=UK+Product"
+
+        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (নতুন মেকানিজম)
+        og_desc = soup.find("meta", property="og:description")
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        
+        if og_desc and og_desc.get("content"):
+            description = og_desc["content"].strip()
+        elif meta_desc and meta_desc.get("content"):
+            description = meta_desc["content"].strip()
+        else:
+            # মেটা ট্যাগে না পেলে বডি থেকে ডেসক্রিপশন ক্লাস বা প্যারাগ্রাফ খোঁজা হবে
+            desc_div = soup.find(class_=re.compile("description|detail|summary|product-desc", re.I))
+            if desc_div:
+                description = desc_div.get_text().strip()
+            else:
+                description = "Premium quality imported item directly from the United Kingdom."
+
+        # অতিরিক্ত স্পেস, নিউলাইন বা হিডেন ক্যারেক্টার ক্লিনআপ করা
+        description = re.sub(r'\s+', ' ', description).strip()
+
+        # ৫. ওজন খোঁজা (আপনার মেথড ব্যবহার করে)
+        weight, unit = parse_weight_from_text(name)
+        if weight == 500 and description:
+            weight, unit = parse_weight_from_text(description)
+
         return jsonify({
-            "name": product_name if product_name else "UK Product",
-            "price": price_val,
-            "weight": weight_val,
-            "unit": unit_val,
-            "image": img_url  # নতুন ইমেজ ফিল্ড
+            "name": name,
+            "price": price,
+            "image": image,
+            "description": description,  # ডেসক্রিপশন ফ্রন্টএন্ডের জন্য পাস করা হলো
+            "weight": weight,
+            "unit": unit
         })
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Failed to scrape data: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=3000, debug=True)
