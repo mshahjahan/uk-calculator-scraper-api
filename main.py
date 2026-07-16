@@ -71,23 +71,52 @@ def scrape():
             else:
                 image = "https://via.placeholder.com/200?text=UK+Product"
 
-        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (নতুন মেকানিজম)
+        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (উন্নত ও অত্যন্ত শক্তিশালী মেকানিজম)
+        description = ""
+        
+        # প্রথমে ওজি (og) বা মেটা ডেসক্রিপশন চেক করা
         og_desc = soup.find("meta", property="og:description")
         meta_desc = soup.find("meta", attrs={"name": "description"})
         
-        if og_desc and og_desc.get("content"):
+        if og_desc and og_desc.get("content") and len(og_desc["content"].strip()) > 15:
             description = og_desc["content"].strip()
-        elif meta_desc and meta_desc.get("content"):
+        elif meta_desc and meta_desc.get("content") and len(meta_desc["content"].strip()) > 15:
             description = meta_desc["content"].strip()
-        else:
-            # মেটা ট্যাগে না পেলে বডি থেকে ডেসক্রিপশন ক্লাস বা প্যারাগ্রাফ খোঁজা হবে
-            desc_div = soup.find(class_=re.compile("description|detail|summary|product-desc", re.I))
-            if desc_div:
-                description = desc_div.get_text().strip()
-            else:
-                description = "Premium quality imported item directly from the United Kingdom."
+            
+        # মেটা ট্যাগে সঠিক ডেসক্রিপশন না পাওয়া গেলে বডির কমন ক্লাস/আইডিগুলো স্ক্যান করা
+        if not description or "javascript" in description.lower() or len(description) < 30:
+            common_selectors = [
+                # IDs
+                "description", "product-description", "details", "tab-description", "pip-product-description",
+                # Classes
+                "product-description", "description", "product-details", "details-content", "product-info-block", 
+                "product-about", "value", "overview", "product-short-description", "item-description"
+            ]
+            
+            for selector in common_selectors:
+                found = soup.find(class_=re.compile(rf"^{selector}$|^{selector}-", re.I))
+                if not found:
+                    found = soup.find(id=re.compile(rf"^{selector}$|^{selector}-", re.I))
+                
+                if found:
+                    text_content = found.get_text().strip()
+                    if len(text_content) > 25:
+                        description = text_content
+                        break
 
-        # অতিরিক্ত স্পেস, নিউলাইন বা হিডেন ক্যারেক্টার ক্লিনআপ করা
+        # তাও যদি না পাওয়া যায়, তবে বডির প্রথম বড় সাইজের প্যারাগ্রাফ (<p>) ট্যাগটি খোঁজা
+        if not description or len(description) < 30:
+            for p_tag in soup.find_all("p"):
+                p_text = p_tag.get_text().strip()
+                if len(p_text) > 60 and not any(x in p_text.lower() for x in ["cookie", "javascript", "browser", "agree"]):
+                    description = p_text
+                    break
+
+        # সবশেষে কিছুই না পাওয়া গেলে ডিফল্ট ফলব্যাক
+        if not description:
+            description = "Premium quality imported item directly from the United Kingdom."
+
+        # অতিরিক্ত স্পেস, ট্যাব, নিউলাইন বা হিডেন ক্যারেক্টার ক্লিনআপ করা
         description = re.sub(r'\s+', ' ', description).strip()
 
         # ৫. ওজন খোঁজা (আপনার মেথড ব্যবহার করে)
