@@ -71,7 +71,7 @@ def scrape():
             else:
                 image = "https://via.placeholder.com/200?text=UK+Product"
 
-        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (উন্নত ও অত্যন্ত শক্তিশালী মেকানিজম)
+        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (নমনীয় মেকানিজম)
         description = ""
         
         # প্রথমে ওজি (og) বা মেটা ডেসক্রিপশন চেক করা
@@ -86,11 +86,9 @@ def scrape():
         # মেটা ট্যাগে সঠিক ডেসক্রিপশন না পাওয়া গেলে বডির কমন ক্লাস/আইডিগুলো স্ক্যান করা
         if not description or "javascript" in description.lower() or len(description) < 30:
             common_selectors = [
-                # IDs
                 "description", "product-description", "details", "tab-description", "pip-product-description",
-                # Classes
-                "product-description", "description", "product-details", "details-content", "product-info-block", 
-                "product-about", "value", "overview", "product-short-description", "item-description"
+                "product-details", "details-content", "product-info-block", "product-about", "value", 
+                "overview", "product-short-description", "item-description"
             ]
             
             for selector in common_selectors:
@@ -112,11 +110,11 @@ def scrape():
                     description = p_text
                     break
 
-        # সবশেষে কিছুই না পাওয়া গেলে ডিফল্ট ফলব্যাক
-        if not description:
-            description = "Premium quality imported item directly from the United Kingdom."
+        # 💡 [NEW] যদি কোনো বিবরণই না পাওয়া যায়, তবে পণ্যের নামের ওপর ভিত্তি করে AI-স্টাইল ফলব্যাক ডেসক্রিপশন তৈরি করা হবে
+        if not description or len(description.strip()) < 10:
+            description = f"Experience the exceptional quality of {name}. Designed with care and imported directly from the United Kingdom, this product delivers premium performance and outstanding results for your daily needs."
 
-        # অতিরিক্ত স্পেস, ট্যাব, নিউলাইন বা হিডেন ক্যারেক্টার ক্লিনআপ করা
+        # অতিরিক্ত স্পেস ক্লিনআপ করা
         description = re.sub(r'\s+', ' ', description).strip()
 
         # ৫. ওজন খোঁজা (আপনার মেথড ব্যবহার করে)
@@ -128,7 +126,7 @@ def scrape():
             "name": name,
             "price": price,
             "image": image,
-            "description": description,  # ডেসক্রিপশন ফ্রন্টএন্ডের জন্য পাস করা হলো
+            "description": description, 
             "weight": weight,
             "unit": unit
         })
