@@ -1,182 +1,102 @@
 import re
-from urllib.parse import urlparse, unquote
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
 
-app = FastAPI(title="বিলেতী পণ্য - Universal AI Scraper Backend")
+app = FastAPI(title="বিলেতী পণ্য UK Scraper API")
 
-# ফ্রন্টএন্ডের সাথে সিকিউর কানেকশন (CORS) নিশ্চিত করার জন্য
+# CORS পলিসি সেটআপ (ফ্রন্টএন্ডের সাথে কানেক্ট করার জন্য)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # আপনার লোকাল বা লাইভ ফ্রন্টএন্ডের জন্য
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class LinkRequest(BaseModel):
+class ScrapeRequest(BaseModel):
     url: str
 
-def parse_fallback_from_url(url: str):
-    """
-    যদি স্ক্র্যাপার কোনো সাইটের ডেটা ব্লক বা প্রটেক্টেড পায়, 
-    তখন এই ফাংশনটি লিংক এনালাইসিস করে একটি নিরাপদ ফলব্যাক ডেটা তৈরি করবে।
-    """
-    try:
-        clean_url = url.split('?')[0].rstrip('/')
-        parsed_url = urlparse(clean_url)
-        domain = parsed_url.netloc.replace('www.', '')
-        segments = [s for s in parsed_url.path.split('/') if s.strip()]
-        
-        if not segments:
-            return None
-            
-        raw_name = segments[-1]
-        # আসডা বা অন্যান্য আইডি যুক্ত লিংকের ক্ষেত্রে আইডি বাদ দিয়ে নাম নেওয়া
-        if raw_name.isdigit() and len(segments) > 1:
-            raw_name = segments[-2]
-            
-        # নাম সুন্দর করে সাজানো
-        name = unquote(raw_name).replace('-', ' ').replace('_', ' ').replace('.', ' ').strip()
-        name = " ".join([w.capitalize() for w in name.split()])
-        
-        # ইউনিভার্সাল ওজন ডিটেকশন
-        weight = 500
-        weight_match = re.search(r'(\d+)\s*(kg|g|ml|l|gram|grams)', name, re.IGNORECASE)
-        if weight_match:
-            val = int(weight_match.get('val', weight_match.group(1)))
-            unit = weight_match.group(2).lower()
-            if unit in ['kg', 'l']:
-                weight = val * 1000
-            else:
-                weight = val
-                
-        # ইউনিভার্সাল ক্যাটাগরি ডিটেকশন
-        category = "Others"
-        name_lower = name.toLowerCase() if hasattr(name, 'toLowerCase') else name.lower()
-        if any(k in name_lower for k in ["rice", "food", "tea", "coffee", "biscuit", "chocolate", "basmati"]):
-            category = "Food & Groceries"
-        elif any(k in name_lower for k in ["cream", "serum", "lotion", "makeup", "cosmetics", "shampoo"]):
-            category = "Beauty & Cosmetics"
-        elif any(k in name_lower for k in ["jeans", "shirt", "pant", "jacket", "dress", "hoodie"]):
-            category = "Fashion & Apparels"
-        elif any(k in name_lower for k in ["phone", "mouse", "keyboard", "tech", "gadget", "wireless"]):
-            category = "Electronics & Gadgets"
-        elif any(k in name_lower for k in ["baby", "diaper", "toy", "feeder"]):
-            category = "Baby Care"
-            
-        return {
-            "title": name if name else "Premium UK Product",
-            "price": 14.99,  # ফলব্যাক প্রাইস
-            "weight": weight,
-            "category": category,
-            "desc": f"Premium product sourced directly from {domain}. High quality assured.",
-            "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=200",
-            "is_fallback": True
-        }
-    except Exception:
-        return None
-
-@app.post("/api/scrape")
-async def scrape_product_link(request: LinkRequest):
-    url = request.url.strip()
+@app.post("/scrape")
+def scrape_product(payload: ScrapeRequest):
+    url = payload.url
     if not url:
-        raise HTTPException(status_code=400, detail="ইউআরএল পাওয়া যায়নি।")
+        raise HTTPException(status_code=400, detail="URL is required")
 
-    # ব্রাউজার রিকোয়েস্ট সিমুলেট করার জন্য হেডার
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
         
-        # যদি সাইটটি স্ক্র্যাপার ব্লক করে (যেমন Cloudflare বা 403 / 404 এরর দেয়)
-        if response.status_code != 200:
-            fallback = parse_fallback_from_url(url)
-            if fallback: return fallback
-            raise HTTPException(status_code=404, detail="প্রোডাক্ট পেজ রিড করা সম্ভব হচ্ছে না।")
-
         soup = BeautifulSoup(response.text, 'html.parser')
+
+        # ১. পণ্যের নাম স্ক্র্যাপ করা
+        og_title = soup.find("meta", property="og:title")
+        name = og_title["content"].strip() if og_title else ""
+        if not name:
+            h1_tag = soup.find("h1")
+            name = h1_tag.get_text().strip() if h1_tag else "UK Premium Product"
+
+        # ২. পণ্যের মূল্য স্ক্র্যাপ করা
+        og_price = soup.find("meta", property="og:price:amount")
+        price_val = og_price["content"].strip() if og_price else ""
         
-        # ১. ইউনিভার্সাল মেটা ট্যাগ স্ক্র্যাপিং (ওপেন গ্রাফ টাইটেল ও ইমেজ)
-        title_tag = soup.find("meta", property="og:title") or soup.find("meta", name="twitter:title") or soup.find("title")
-        image_tag = soup.find("meta", property="og:image") or soup.find("meta", name="twitter:image")
-        desc_tag = soup.find("meta", property="og:description") or soup.find("meta", name="description")
-
-        title = title_tag.get("content", title_tag.text) if title_tag else ""
-        if not title or len(title.strip()) < 3:
-            # মেটা ট্যাগ না থাকলে ইউআরএল থেকে জেনারেট করবে
-            fallback = parse_fallback_from_url(url)
-            if fallback: return fallback
-            raise HTTPException(status_code=400, detail="পণ্যের নাম সনাক্ত করা যায়নি।")
-
-        title = title.split('|')[0].split('-')[0].strip() # সাইটের নাম বাদ দেওয়া
-        image = image_tag.get("content", "") if image_tag else "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=200"
-        desc = desc_tag.get("content", f"Premium product imported directly from UK store. Sourced carefully for local requirements.") if desc_tag else ""
-
-        # ২. স্ক্র্যাপড টেক্সট থেকে সঠিক ওজন খোঁজা
-        weight = 500
-        weight_match = re.search(r'(\d+)\s*(kg|g|ml|l|gram|grams)', title, re.IGNORECASE)
-        if weight_match:
-            val = int(weight_match.group(1))
-            unit = weight_match.group(2).lower()
-            if unit in ['kg', 'l']:
-                weight = val * 1000
+        if not price_val:
+            # প্রাইস ক্লাসের ভেতর থেকে রেগুলার এক্সপ্রেশন দিয়ে খোঁজা
+            price_element = soup.find(class_=re.compile("price|amount", re.I))
+            if price_element:
+                price_text = price_element.get_text()
+                price_numbers = re.findall(r"\d+\.\d+|\d+", price_text)
+                price_val = price_numbers[0] if price_numbers else "0"
             else:
-                weight = val
+                price_val = "0"
+                
+        try:
+            price = float(price_val)
+        except ValueError:
+            price = 0.0
 
-        # ৩. ইউনিভার্সাল ক্যাটাগরি ফিল্টারিং
-        category = "Others"
-        title_lower = title.lower()
-        if any(k in title_lower for k in ["rice", "food", "tea", "coffee", "biscuit", "chocolate", "crisps"]):
-            category = "Food & Groceries"
-        elif any(k in title_lower for k in ["cream", "serum", "lotion", "makeup", "cosmetics", "moisturizer"]):
-            category = "Beauty & Cosmetics"
-        elif any(k in title_lower for k in ["jeans", "shirt", "pant", "jacket", "dress", "t-shirt"]):
-            category = "Fashion & Apparels"
-        elif any(k in title_lower for k in ["phone", "mouse", "keyboard", "gadget", "electronics"]):
-            category = "Electronics & Gadgets"
-        elif any(k in title_lower for k in ["baby", "diaper", "toy"]):
-            category = "Baby Care"
+        # ৩. পণ্যের ছবি স্ক্র্যাপ করা
+        og_image = soup.find("meta", property="og:image")
+        image = og_image["content"].strip() if og_image else ""
+        if not image:
+            img_tag = soup.find("img")
+            image = img_tag["src"].strip() if img_tag else "https://via.placeholder.com/200?text=UK+Product"
 
-        # ৪. সাধারণ ই-কমার্স সাইটের জন্য প্রাইস ডিটেকশন (ফলব্যাক ১৫ পাউন্ড যদি খুঁজে না পায়)
-        price = 15.00
-        price_text = soup.find(text=re.compile(r'£\s*\d+\.?\d*'))
-        if price_text:
-            price_match = re.search(r'£\s*(\d+\.?\d*)', price_text)
-            if price_match:
-                price = float(price_match.group(1))
+        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (আপডেটেড লজিক)
+        # প্রথমে ওপেন গ্রাফ (og) বা মেটা ডেসক্রিপশন চেক করা হচ্ছে
+        og_desc = soup.find("meta", property="og:description")
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        
+        if og_desc and og_desc.get("content"):
+            description = og_desc["content"].strip()
+        elif meta_desc and meta_desc.get("content"):
+            description = meta_desc["content"].strip()
+        else:
+            # যদি মেটা ট্যাগে না পাওয়া যায়, তবে বডির ডেসক্রিপশন ক্লাস চেক করা হবে
+            desc_div = soup.find(class_=re.compile("description|detail|summary", re.I))
+            description = desc_div.get_text().strip() if desc_div else "Premium quality imported item directly from the United Kingdom."
+
+        # অতিরিক্ত স্পেস ও নিউলাইন ক্লিনআপ করা
+        description = re.sub(r'\s+', ' ', description).strip()
 
         return {
-            "title": title,
+            "name": name,
             "price": price,
-            "weight": weight,
-            "category": category,
-            "desc": desc[:180] + "...",
             "image": image,
-            "is_fallback": False
+            "description": description,  # ডেসক্রিপশন ফিল্ড যুক্ত করা হলো
+            "weight": 500,               # ডিফল্ট ওজন (Grams)
+            "unit": "Grams"
         }
 
-    except Exception:
-        # কোনো কারণে স্ক্র্যাপার ক্র্যাশ করলে পুরো অ্যাপ যাতে বন্ধ না হয়, তার জন্য নিরাপদ ফলব্যাক
-        fallback = parse_fallback_from_url(url)
-        if fallback:
-            return fallback
-        return {
-            "title": "Premium UK Import Product",
-            "price": 19.99,
-            "weight": 500,
-            "category": "Others",
-            "desc": "Directly imported from verified vendors in the United Kingdom.",
-            "image": "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=200",
-            "is_fallback": True
-        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to scrape data: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=3000, reload=True)
