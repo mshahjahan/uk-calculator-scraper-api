@@ -6,7 +6,8 @@ import re
 from urllib.parse import urljoin
 
 app = Flask(__name__)
-CORS(app)
+# গিটহাব পেজেস থেকে রিকোয়েস্ট আসার জন্য CORS সম্পূর্ণ ওপেন রাখা হয়েছে
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 def parse_weight_from_text(text):
     if not text:
@@ -71,10 +72,8 @@ def scrape():
             else:
                 image = "https://via.placeholder.com/200?text=UK+Product"
 
-        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (নমনীয় মেকানিজম)
+        # ৪. পণ্যের ডেসক্রিপশন স্ক্র্যাপ করা (ফলব্যাক মেকানিজম)
         description = ""
-        
-        # প্রথমে ওজি (og) বা মেটা ডেসক্রিপশন চেক করা
         og_desc = soup.find("meta", property="og:description")
         meta_desc = soup.find("meta", attrs={"name": "description"})
         
@@ -83,26 +82,22 @@ def scrape():
         elif meta_desc and meta_desc.get("content") and len(meta_desc["content"].strip()) > 15:
             description = meta_desc["content"].strip()
             
-        # মেটা ট্যাগে সঠিক ডেসক্রিপশন না পাওয়া গেলে বডির কমন ক্লাস/আইডিগুলো স্ক্যান করা
         if not description or "javascript" in description.lower() or len(description) < 30:
             common_selectors = [
                 "description", "product-description", "details", "tab-description", "pip-product-description",
                 "product-details", "details-content", "product-info-block", "product-about", "value", 
                 "overview", "product-short-description", "item-description"
             ]
-            
             for selector in common_selectors:
                 found = soup.find(class_=re.compile(rf"^{selector}$|^{selector}-", re.I))
                 if not found:
                     found = soup.find(id=re.compile(rf"^{selector}$|^{selector}-", re.I))
-                
                 if found:
                     text_content = found.get_text().strip()
                     if len(text_content) > 25:
                         description = text_content
                         break
 
-        # তাও যদি না পাওয়া যায়, তবে বডির প্রথম বড় সাইজের প্যারাগ্রাফ (<p>) ট্যাগটি খোঁজা
         if not description or len(description) < 30:
             for p_tag in soup.find_all("p"):
                 p_text = p_tag.get_text().strip()
@@ -110,14 +105,13 @@ def scrape():
                     description = p_text
                     break
 
-        # 💡 [NEW] যদি কোনো বিবরণই না পাওয়া যায়, তবে পণ্যের নামের ওপর ভিত্তি করে AI-স্টাইল ফলব্যাক ডেসক্রিপশন তৈরি করা হবে
+        # ডেসক্রিপশন ফাঁকা থাকলে AI জেনারেশনের জন্য বেস স্ট্রাকচার দেওয়া
         if not description or len(description.strip()) < 10:
             description = f"Experience the exceptional quality of {name}. Designed with care and imported directly from the United Kingdom, this product delivers premium performance and outstanding results for your daily needs."
 
-        # অতিরিক্ত স্পেস ক্লিনআপ করা
         description = re.sub(r'\s+', ' ', description).strip()
 
-        # ৫. ওজন খোঁজা (আপনার মেথড ব্যবহার করে)
+        # ৫. ওজন খোঁজা
         weight, unit = parse_weight_from_text(name)
         if weight == 500 and description:
             weight, unit = parse_weight_from_text(description)
